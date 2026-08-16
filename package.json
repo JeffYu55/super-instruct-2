@@ -1,0 +1,13 @@
+{
+  "name": "super-instruct",
+  "version": "0.1.0",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "copy-resources": "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force src-tauri/resources/codex-skills | Out-Null; Copy-Item bridge.md src-tauri/resources/ -Force; Copy-Item codex-skills/* src-tauri/resources/codex-skills/ -Recurse -Force\""
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

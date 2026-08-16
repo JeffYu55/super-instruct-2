@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super-Instruct</title>
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="app.js"></script>
+</head>
+<body>
+
+<!-- ═══ 标题栏 ═══ -->
+<div class="titlebar" data-tauri-drag-region>
+    <div class="tb-logo" data-tauri-drag-region>
+        <div class="tb-logo-mark" data-tauri-drag-region></div>
+        <span class="tb-logo-text" data-tauri-drag-region>Super-Instruct</span>
+        <span class="tb-logo-sub" data-tauri-drag-region>v5.6</span>
+    </div>
+    <div class="tb-spacer" data-tauri-drag-region></div>
+    <button class="tb-btn" id="tb-minimize" title="最小化">—</button>
+    <button class="tb-btn" id="tb-maximize" title="最大化">▢</button>
+    <button class="tb-btn close" id="tb-close" title="关闭">✕</button>
+</div>
+
+<div class="preflight-modal" id="preflight-modal" style="display:none;">
+    <div class="preflight-card">
+        <div class="preflight-title">启动检查</div>
+        <div class="preflight-list" id="preflight-list"></div>
+        <div class="preflight-actions" id="preflight-actions">
+            <button class="btn" id="preflight-cancel">取消</button>
+        </div>
+    </div>
+</div>
+
+<div class="body-wrap">
+    <!-- ═══ 侧边栏 ═══ -->
+    <aside class="sidebar">
+        <div class="sidebar-section">
+            <div class="sidebar-label">导航</div>
+            <div class="nav-item active" id="nav-dashboard">
+                <span class="nav-icon">▣</span> 仪表盘
+            </div>
+            <div class="nav-item" id="nav-config">
+                <span class="nav-icon">⚙</span> 配置管理
+            </div>
+            <div class="nav-item" id="nav-skills">
+                <span class="nav-icon">◈</span> Skills 管理
+            </div>
+        </div>
+        <div class="sidebar-section">
+            <div class="sidebar-label">操作</div>
+            <div class="nav-item" id="nav-toggle-proxy">
+                <span class="nav-icon" id="toggle-icon">▶</span>
+                <span id="toggle-label">启动代理</span>
+            </div>
+        </div>
+        <div class="sidebar-spacer"></div>
+        <div class="sidebar-status" id="health-panel">
+            <div class="ss-row">
+                <span class="ss-label">代理状态</span>
+                <div style="display:flex;align-items:center;gap:5px;">
+                    <div class="ss-dot" id="ss-dot"></div>
+                    <span class="ss-val" id="ss-proxy-status">已停止</span>
+                </div>
+            </div>
+            <div class="ss-row">
+                <span class="ss-label">Codex</span>
+                <span class="ss-val" id="ss-codex-status">--</span>
+            </div>
+            <div class="ss-row">
+                <span class="ss-label">中转站</span>
+                <span class="ss-val" id="ss-relay">--</span>
+            </div>
+            <div class="ss-row">
+                <span class="ss-label">破甲注入</span>
+                <span class="ss-val" id="ss-bridge-status">未部署</span>
+            </div>
+            <div class="ss-row">
+                <span class="ss-label">规则数</span>
+                <span class="ss-val">22</span>
+            </div>
+            <div class="ss-row">
+                <span class="ss-label">记忆</span>
+                <span class="ss-val" id="ss-memory">0</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ═══ 主区域 ═══ -->
+    <div class="main">
+        <!-- 仪表盘 head -->
+        <div class="main-head" id="head-dashboard">
+            <span class="main-title">仪表盘</span>
+            <div class="main-actions">
+                <button class="btn" id="btn-clear-log">清空日志</button>
+            </div>
+        </div>
+        <!-- 配置 head -->
+        <div class="main-head" id="head-config" style="display:none;">
+            <span class="main-title">配置管理</span>
+            <div class="main-actions">
+                <button class="btn" id="btn-refresh">刷新状态</button>
+            </div>
+        </div>
+
+        <!-- Skills head -->
+        <div class="main-head" id="head-skills" style="display:none;">
+            <span class="main-title">Skills 管理</span>
+            <div class="main-actions">
+                <button class="btn" id="btn-skills-enable-all">全部启用</button>
+                <button class="btn" id="btn-skills-disable-all">全部禁用</button>
+                <button class="btn btn-red" id="btn-skills-redeploy">重新部署</button>
+            </div>
+        </div>
+
+        <!-- 仪表盘 -->
+        <div class="main-content active" id="page-dashboard">
+            <div class="dash-pad">
+                <div class="stats-row">
+                    <div class="stat s-total"><div class="stat-num" id="stat-total">0</div><div class="stat-name">总计</div></div>
+                    <div class="stat s-crack"><div class="stat-num" id="stat-crack">0</div><div class="stat-name">破解</div></div>
+                    <div class="stat s-reverse"><div class="stat-num" id="stat-reverse">0</div><div class="stat-name">逆向</div></div>
+                    <div class="stat s-pentest"><div class="stat-num" id="stat-pentest">0</div><div class="stat-name">渗透</div></div>
+                    <div class="stat s-tamper"><div class="stat-num" id="stat-tamper">0</div><div class="stat-name">已篡改</div></div>
+                </div>
+            </div>
+            <div class="log-box">
+                <div class="log-head">
+                    <span class="log-head-title">交互日志</span>
+                    <span class="log-head-count" id="log-count">0 条记录</span>
+                </div>
+                <div class="log-list" id="log-list">
+                    <div class="log-empty">等待交互…</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 配置 -->
+        <div class="main-content" id="page-config">
+            <div class="config-scroll">
+                <div class="cfg-block">
+                    <div class="cfg-block-head">Codex 环境</div>
+                    <div class="cfg-line"><div class="cfg-k">安装路径</div><div class="cfg-v" id="cfg-codex-home">--</div></div>
+                    <div class="cfg-line"><div class="cfg-k">中转站</div><div class="cfg-v" id="cfg-relay-url">--</div></div>
+                    <div class="cfg-line"><div class="cfg-k">部署状态</div><div class="cfg-v" id="cfg-bridge-status">--</div></div>
+                </div>
+                <div class="cfg-block">
+                    <div class="cfg-block-head">中转站地址</div>
+                    <div class="cfg-relay-edit">
+                        <input type="text" id="cfg-relay-input" class="cfg-input" placeholder="https://your-relay-url.com/v1" autocomplete="off" spellcheck="false">
+                        <button class="btn btn-red solid" id="btn-save-relay">保存</button>
+                    </div>
+                    <div class="cfg-relay-hint">代理启动时会自动读取此地址作为上游转发目标。请勿填 http://127.0.0.1:8080，那是本地代理端口。</div>
+                    <div class="cfg-msg" id="cfg-relay-message"></div>
+                </div>
+                <div class="cfg-block">
+                    <div class="cfg-block-head">部署操作</div>
+                    <div class="cfg-ops">
+                        <button class="btn btn-red solid" id="btn-deploy">部署 bridge.md</button>
+                        <button class="btn btn-red" id="btn-restore">还原配置</button>
+                    </div>
+                    <div class="cfg-msg" id="cfg-message"></div>
+                </div>
+                <div class="cfg-block">
+                    <div class="cfg-block-head">系统信息</div>
+                    <div class="cfg-line"><div class="cfg-k">篡改规则</div><div class="cfg-v">22 条（中/英/俄/日 × 4 优先级）</div></div>
+                    <div class="cfg-line"><div class="cfg-k">记忆记录</div><div class="cfg-v" id="cfg-memory-count">0 条成功交互</div></div>
+                    <div class="cfg-line"><div class="cfg-k">代理端口</div><div class="cfg-v">127.0.0.1:8080</div></div>
+                    <div class="cfg-line"><div class="cfg-k">SSE 修复</div><div class="cfg-v amber">已启用（response.completed 包装）</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Skills 管理 -->
+        <div class="main-content" id="page-skills">
+            <div class="skills-scroll">
+                <div class="skills-stats" id="skills-stats">
+                    <span class="skills-stats-text" id="skills-stats-text">加载中…</span>
+                </div>
+                <div class="skills-grid" id="skills-grid">
+                    <div class="log-empty">加载中…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
