@@ -24,6 +24,9 @@ build/
 # Runtime artifacts (generated, not version-controlled)
 logs/
 memory.json
+evolution/generations/
+evolution/policy.json.prev
+evolution/policy.lock
 
 # IDE
 .vscode/

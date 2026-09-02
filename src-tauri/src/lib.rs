@@ -422,6 +422,7 @@ async fn health_check(
         "cot_refusals_detected": cot_refusals,
         "available_tool_count": available_tool_count,
         "quality_gate": "enabled",
+        "evolution": crate::core::adaptive::status(),
         "outcomes": stats
     }))
 }

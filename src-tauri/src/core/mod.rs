@@ -4,6 +4,7 @@
 //   2. finalize_response — 解析 → 响应拦截器 → 返回最终 body (后处理)
 // axum handler 负责流式透传 + 背景累积 + 后处理调用
 
+pub mod adaptive;
 pub mod context;
 pub mod contract;
 pub mod cot;

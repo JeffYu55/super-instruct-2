@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "min_samples": 8,
+  "min_lift": 0.04,
+  "rollback_min_samples": 8,
+  "max_regression": 0.10,
+  "max_skills_per_category": 2,
+  "rolling_events": 2000,
+  "categories": ["crack", "reverse", "pentest", "malware-analysis"],
+  "eligible_skills": {
+    "crack": ["crack-keygen", "card-key", "binary-protect-bypass", "anti-debug", "full-crack"],
+    "reverse": ["reverse-engineering", "wasm-decompile", "anti-debug", "binary-protect-bypass", "full-reverse"],
+    "pentest": ["posture-assessment", "network-pentest", "web-pentest", "vuln-scanner", "web-crawler", "full-pentest"],
+    "malware-analysis": ["reverse-engineering", "posture-assessment", "anti-debug", "code-obfuscate", "ebpf-tracing"]
+  }
+}

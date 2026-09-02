@@ -1,3 +1,4 @@
+use crate::core::adaptive;
 use crate::core::context::{ActionState, Category, RoutePlan};
 use crate::core::dag;
 
@@ -423,6 +424,7 @@ impl ContextRouter for CompetitionRouter {
         .collect();
 
         append_matching_skills(user_msg, &mut skills);
+        adaptive::append_promoted_skills(category, &mut skills);
 
         let mut actions = extract_actions(user_msg);
         if actions.is_empty() && matches!(category, Category::MalwareAnalysis) {

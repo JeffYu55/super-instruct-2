@@ -6,6 +6,7 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 cd "$DIR"
 
 mkdir -p ../logs
+export SUPER_INSTRUCT_EVOLUTION_POLICY="${SUPER_INSTRUCT_EVOLUTION_POLICY:-$DIR/../evolution/policy.json}"
 
 LOCK_DIR="${TMPDIR:-/tmp}/super-instruct-$(id -u).lock"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -19,11 +20,22 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     }
     mkdir "$LOCK_DIR" 2>/dev/null || exit 1
 fi
+EVOLUTION_PID=""
 cleanup() {
+    if [[ -n "${EVOLUTION_PID:-}" ]]; then
+        kill "$EVOLUTION_PID" 2>/dev/null || true
+        wait "$EVOLUTION_PID" 2>/dev/null || true
+    fi
     rmdir "$LOCK_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 0' INT TERM
+
+if [[ -x "$DIR/../scripts/evolution_daemon.sh" ]]; then
+    "$DIR/../scripts/evolution_daemon.sh" &
+    EVOLUTION_PID=$!
+    echo "[$(date)] Evolution controller started as pid $EVOLUTION_PID." >> ../logs/keepalive.log
+fi
 
 while true; do
     # Ensure port 8080 is not currently occupied before starting
@@ -33,7 +45,7 @@ while true; do
     done
 
     echo "[$(date)] Starting super-instruct proxy..." >> ../logs/keepalive.log
-    ./target/release/super-instruct >> ../logs/service-console.log 2>&1
+    ./target/release/super-instruct --no-deploy >> ../logs/service-console.log 2>&1
     EXIT_CODE=$?
     echo "[$(date)] super-instruct proxy exited with code $EXIT_CODE." >> ../logs/keepalive.log
     sleep 3
