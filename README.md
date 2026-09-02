@@ -21,6 +21,7 @@ Codex CLI
 - 保留 SSE/JSON 响应解析，并原样返回上游响应。
 - 对拒绝和任务偏离记录结构化 `refusal_reason`，不重写展示内容或自动重试。
 - 将任务动作、路由、Profile 和 Skill 写入记忆。
+- 以阶段状态机拆分规划、采证、分析、变更、验证和报告请求。
 - 使用 JSONL 文件监控替代 Tauri 前端事件。
 - 启动时部署 Codex 配置，退出或启动失败时自动恢复。
 - 非 2xx、拒绝和质量门控未通过的响应不会写入成功记忆。
@@ -47,6 +48,10 @@ cargo build --release
 --skills DIR         codex-skills 路径
 --logs DIR           普通日志和 interactions.jsonl 路径
 --memory FILE        memory.json 路径
+--sessions DIR       研究会话检查点目录，默认 research-sessions
+--research-max-rounds N  单会话最大模型轮次，默认 12
+--research-timeout-secs N  单会话超时秒数，默认 1800
+--research-no-evidence-limit N  连续无新证据轮次上限，默认 2
 --execution-mode MODE  执行模式：upstream-first、local-first 或 interleaved（默认）
 --no-deploy          只启动代理，不改写 Codex config.toml
 ```
@@ -66,7 +71,46 @@ unresolved_actions
 task_alignment
 ```
 
-只有上游结果为真实成功、响应内容完整、任务方向一致、总分至少 70、全部请求动作被覆盖且包含可核验证据信号时，结果才进入成功记忆。拒绝、任务偏离、传输错误和证据不足的响应仍写入 `interactions.jsonl`，但不会标记为完成。对于恶意软件类别，`posture-assessment` 仅在请求明确包含检测、防御、缓解或安全评估意图时加载。
+只有当前阶段真实成功、响应内容完整、任务方向一致、总分至少 70 且包含可核验证据信号时，该阶段才进入成功记忆。完整任务须在全部阶段完成后才标记为整体完成。拒绝、任务偏离、传输错误和证据不足的响应仍写入 `interactions.jsonl`，但不会标记为完成。对于恶意软件类别，`posture-assessment` 仅在请求明确包含检测、防御、缓解或安全评估意图时加载。
+
+## 阶段化请求编排
+
+项目级编排器将研究任务升级为可恢复的多轮会话。普通对话仍透明转发；研究会话保存完整 DAG、阶段、轮次、证据、审批和上游回放游标：
+
+```text
+framing -> planning -> evidence -> analysis -> transformation -> execution -> verification -> reporting
+```
+
+`framing/planning/evidence/analysis/reporting` 自动推进；进入 `transformation`、`execution`、`verification` 前返回：
+
+```text
+AWAITING_APPROVAL stage=<stage> [RESEARCH_SESSION:<id>]
+```
+
+同一会话回复 `继续`只批准当前阶段。会话识别依次采用显式请求头、请求体 session ID、provider conversation/response ID、会话标记和首轮指纹。客户端也可显式携带阶段头用于一致性检查：
+
+```text
+X-Super-Instruct-Stage: analysis
+```
+
+或在 JSON 请求体中指定：
+
+```json
+{"super_instruct":{"stage":"analysis"}}
+```
+
+代理向研究请求注入内部函数 `super_instruct_stage_complete`。该函数只提交阶段状态并由代理截获；普通工具调用仍由 Codex 客户端执行。客户端回传的 `function_call_output`、`role:"tool"` 和其他 `*_call_output` 会进入 SHA-256 去重证据图。
+
+检查点写入 `research-sessions/<session_id>.json`。进度接口为：
+
+```text
+GET /super-instruct/v1/sessions/<id>
+GET /super-instruct/v1/sessions/<id>/events
+```
+
+事件流只发送阶段摘要、轮次、状态、证据计数和停止原因。
+
+普通安全评估请求使用 `assessment-security` profile，并从姿态评估、资产观测和非破坏性验证开始；完整工作流技能只有在请求明确指定对应工作流时才加入路由。
 
 ## Contract-First Gateway
 

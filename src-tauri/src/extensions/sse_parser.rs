@@ -12,7 +12,15 @@ static TEXT_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap()
 });
 
-const REASONING_MARKERS: &[&str] = &["reasoning", "thinking", "thought", "analysis"];
+const REASONING_KEYS: &[&str] = &[
+    "reasoning_content",
+    "reasoning",
+    "thinking",
+    "thought",
+    "analysis",
+    "thought_process",
+];
+
 const TEXT_KEYS: &[&str] = &[
     "output_text",
     "content",
@@ -21,6 +29,10 @@ const TEXT_KEYS: &[&str] = &[
     "result",
     "answer",
     "completion",
+    "summary",
+    "statement",
+    "observations",
+    "inferences",
 ];
 const WRAPPER_KEYS: &[&str] = &["response", "data", "body", "payload"];
 
@@ -56,7 +68,7 @@ impl ResponseParser for UniversalSseParser {
                     .and_then(|t| t.as_str())
                     .unwrap_or("")
                     .to_lowercase();
-                let force = if REASONING_MARKERS.iter().any(|m| event_type.contains(m)) {
+                let force = if REASONING_KEYS.iter().any(|m| event_type.contains(m)) {
                     Some(Force::Thinking)
                 } else {
                     None
@@ -96,8 +108,18 @@ impl ResponseParser for UniversalSseParser {
             }
         }
 
-        let thinking_str = merge_chunks(&thinking);
+        let mut thinking_str = merge_chunks(&thinking);
         let mut reply_str = merge_chunks(&reply);
+
+        // 5. 提取并分离 reply 中内嵌的 <think> / <thought> / <reasoning> XML 标签
+        let (extracted_xml_thinking, cleaned_reply) = extract_xml_thinking_tags(&reply_str);
+        if !extracted_xml_thinking.is_empty() {
+            if !thinking_str.is_empty() {
+                thinking_str.push_str("\n\n");
+            }
+            thinking_str.push_str(&extracted_xml_thinking);
+            reply_str = cleaned_reply;
+        }
 
         // 如果没有 reply 但有 thinking，用 thinking 作为 reply
         if reply_str.is_empty() && !thinking_str.is_empty() {
@@ -122,6 +144,216 @@ impl ResponseParser for UniversalSseParser {
             reply: reply_str,
         }
     }
+}
+
+/// 提取并剥离文本中类似 <think>...</think> 或 <thought>...</thought> 的思维链标签
+pub fn extract_xml_thinking_tags(text: &str) -> (String, String) {
+    let tags = [
+        ("think", "</think>"),
+        ("thought", "</thought>"),
+        ("reasoning", "</reasoning>"),
+    ];
+    let mut current_text = text.to_string();
+    let mut extracted_thoughts = Vec::new();
+
+    for (open_tag_name, close_tag) in tags {
+        let open_tag = format!("<{}>", open_tag_name);
+        while let Some(start_idx) = current_text.find(&open_tag) {
+            let after_open = start_idx + open_tag.len();
+            if let Some(end_offset) = current_text[after_open..].find(close_tag) {
+                let end_idx = after_open + end_offset;
+                let thought_content = &current_text[after_open..end_idx];
+                extracted_thoughts.push(thought_content.trim().to_string());
+
+                let mut new_text = String::with_capacity(current_text.len());
+                new_text.push_str(&current_text[..start_idx]);
+                new_text.push_str(&current_text[end_idx + close_tag.len()..]);
+                current_text = new_text;
+            } else {
+                // 没有闭合标签，将 open_tag 之后全部作为 thinking
+                let thought_content = &current_text[after_open..];
+                extracted_thoughts.push(thought_content.trim().to_string());
+                current_text = current_text[..start_idx].to_string();
+                break;
+            }
+        }
+    }
+
+    (
+        extracted_thoughts.join("\n\n"),
+        current_text.trim().to_string(),
+    )
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Force {
+    Thinking,
+}
+
+fn is_reasoning(obj: &Value) -> bool {
+    if !obj.is_object() {
+        return false;
+    }
+    let label = format!(
+        "{} {} {}",
+        obj.get("type").and_then(|v| v.as_str()).unwrap_or(""),
+        obj.get("role").and_then(|v| v.as_str()).unwrap_or(""),
+        obj.get("name").and_then(|v| v.as_str()).unwrap_or("")
+    )
+    .to_lowercase();
+    REASONING_KEYS.iter().any(|m| label.contains(m))
+}
+
+fn collect_structured(
+    obj: &Value,
+    force: Option<Force>,
+    thinking: &mut Vec<String>,
+    reply: &mut Vec<String>,
+    depth: u32,
+) {
+    if obj.is_null() || depth > 10 {
+        return;
+    }
+
+    match obj {
+        Value::String(s) => {
+            if !s.is_empty() {
+                let target = if force == Some(Force::Thinking) {
+                    thinking
+                } else {
+                    reply
+                };
+                target.push(s.clone());
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                collect_structured(item, force, thinking, reply, depth + 1);
+            }
+        }
+        Value::Object(map) => {
+            let next_force = if is_reasoning(obj) {
+                Some(Force::Thinking)
+            } else {
+                force
+            };
+
+            // choices 数组 (OpenAI Chat API)
+            if let Some(choices) = map.get("choices").and_then(|v| v.as_array()) {
+                for choice in choices {
+                    if let Some(choice_obj) = choice.as_object() {
+                        // 优先提取 choices 级别的 reasoning 字段
+                        for key in REASONING_KEYS {
+                            if let Some(val) = choice_obj.get(*key) {
+                                collect_structured(
+                                    val,
+                                    Some(Force::Thinking),
+                                    thinking,
+                                    reply,
+                                    depth + 1,
+                                );
+                            }
+                        }
+
+                        // delta / message / text
+                        for key in &["message", "delta", "text", "content"] {
+                            if let Some(val) = choice_obj.get(*key) {
+                                collect_structured(val, next_force, thinking, reply, depth + 1);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // reasoning keys (通用 reasoning_content, thought 等)
+            for key in REASONING_KEYS {
+                if let Some(val) = map.get(*key) {
+                    collect_structured(val, Some(Force::Thinking), thinking, reply, depth + 1);
+                }
+            }
+
+            // output / delta / part
+            for key in &["output", "delta", "part"] {
+                if let Some(val) = map.get(*key) {
+                    collect_structured(val, next_force, thinking, reply, depth + 1);
+                }
+            }
+
+            // function_call / tool_calls arguments 提取
+            if let Some(args) = map.get("arguments") {
+                if let Some(s) = args.as_str() {
+                    if let Ok(parsed_args) = serde_json::from_str::<Value>(s) {
+                        collect_structured(&parsed_args, next_force, thinking, reply, depth + 1);
+                    } else if !s.is_empty() {
+                        reply.push(s.to_string());
+                    }
+                } else {
+                    collect_structured(args, next_force, thinking, reply, depth + 1);
+                }
+            }
+
+            // text keys
+            for key in TEXT_KEYS {
+                if let Some(val) = map.get(*key) {
+                    collect_structured(val, next_force, thinking, reply, depth + 1);
+                }
+            }
+
+            // wrapper keys
+            for key in WRAPPER_KEYS {
+                if let Some(val) = map.get(*key) {
+                    collect_structured(val, next_force, thinking, reply, depth + 1);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 合并流式分块，去重，检测重复模式
+fn merge_chunks(chunks: &[String]) -> String {
+    let mut merged = String::new();
+    for chunk in chunks {
+        if chunk.is_empty() {
+            continue;
+        }
+        if merged.is_empty() {
+            merged = chunk.clone();
+            continue;
+        }
+        if chunk == &merged {
+            continue;
+        }
+        if chunk.len() > 20 && merged.contains(chunk) {
+            continue;
+        }
+        if chunk.starts_with(&merged) {
+            merged = chunk.clone();
+            continue;
+        }
+        merged.push_str(chunk);
+    }
+
+    // 检测重复模式 (如 SSE 重复发送同一段内容)
+    // 使用 char 边界而非字节边界，避免 panic
+    let stripped = merged.trim().to_string();
+    let char_count = stripped.chars().count();
+    if char_count >= 12 {
+        let chars: Vec<char> = stripped.chars().collect();
+        for size in 4..(char_count / 2 + 1) {
+            if char_count.is_multiple_of(size) {
+                let repeats = char_count / size;
+                let piece: String = chars[..size].iter().collect();
+                if (repeats >= 3 || piece.chars().count() >= 12)
+                    && piece.repeat(repeats) == stripped
+                {
+                    return piece.trim().to_string();
+                }
+            }
+        }
+    }
+
+    stripped
 }
 
 /// 寻找回复中的 ```base64 ... ``` 编码槽并静默解码为真实代码/文本
@@ -207,6 +439,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_extract_xml_thinking_tags() {
+        let raw = "<think>\nAnalyzing the binary offsets and jump tables...\n</think>\nHere is the assembly code:";
+        let (thinking, reply) = extract_xml_thinking_tags(raw);
+        assert_eq!(thinking, "Analyzing the binary offsets and jump tables...");
+        assert_eq!(reply, "Here is the assembly code:");
+    }
+
+    #[test]
     fn decodes_base64_payload_block() {
         let raw = "Intro text\n```base64\naW1wb3J0IG9zCnByaW50KCJzYW5kYm94Iik=\n```\nOutro text";
         let decoded = decode_base64_payload_blocks(raw);
@@ -214,141 +454,4 @@ mod tests {
         assert!(decoded.contains("print(\"sandbox\")"));
         assert!(!decoded.contains("```base64"));
     }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Force {
-    Thinking,
-}
-
-fn is_reasoning(obj: &Value) -> bool {
-    if !obj.is_object() {
-        return false;
-    }
-    let label = format!(
-        "{} {} {}",
-        obj.get("type").and_then(|v| v.as_str()).unwrap_or(""),
-        obj.get("role").and_then(|v| v.as_str()).unwrap_or(""),
-        obj.get("name").and_then(|v| v.as_str()).unwrap_or("")
-    )
-    .to_lowercase();
-    REASONING_MARKERS.iter().any(|m| label.contains(m))
-}
-
-fn collect_structured(
-    obj: &Value,
-    force: Option<Force>,
-    thinking: &mut Vec<String>,
-    reply: &mut Vec<String>,
-    depth: u32,
-) {
-    if obj.is_null() || depth > 10 {
-        return;
-    }
-
-    match obj {
-        Value::String(s) => {
-            if !s.is_empty() {
-                let target = if force == Some(Force::Thinking) {
-                    thinking
-                } else {
-                    reply
-                };
-                target.push(s.clone());
-            }
-        }
-        Value::Array(arr) => {
-            for item in arr {
-                collect_structured(item, force, thinking, reply, depth + 1);
-            }
-        }
-        Value::Object(map) => {
-            let next_force = if is_reasoning(obj) {
-                Some(Force::Thinking)
-            } else {
-                force
-            };
-
-            // choices 数组 (OpenAI Chat API)
-            if let Some(choices) = map.get("choices").and_then(|v| v.as_array()) {
-                for choice in choices {
-                    if let Some(choice_obj) = choice.as_object() {
-                        for key in &["message", "delta", "text", "content"] {
-                            if let Some(val) = choice_obj.get(*key) {
-                                collect_structured(val, next_force, thinking, reply, depth + 1);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // output / delta / part
-            for key in &["output", "delta", "part"] {
-                if let Some(val) = map.get(*key) {
-                    collect_structured(val, next_force, thinking, reply, depth + 1);
-                }
-            }
-
-            // text keys
-            for key in TEXT_KEYS {
-                if let Some(val) = map.get(*key) {
-                    collect_structured(val, next_force, thinking, reply, depth + 1);
-                }
-            }
-
-            // wrapper keys
-            for key in WRAPPER_KEYS {
-                if let Some(val) = map.get(*key) {
-                    collect_structured(val, next_force, thinking, reply, depth + 1);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-/// 合并流式分块，去重，检测重复模式
-fn merge_chunks(chunks: &[String]) -> String {
-    let mut merged = String::new();
-    for chunk in chunks {
-        if chunk.is_empty() {
-            continue;
-        }
-        if merged.is_empty() {
-            merged = chunk.clone();
-            continue;
-        }
-        if chunk == &merged {
-            continue;
-        }
-        if chunk.len() > 20 && merged.contains(chunk) {
-            continue;
-        }
-        if chunk.starts_with(&merged) {
-            merged = chunk.clone();
-            continue;
-        }
-        merged.push_str(chunk);
-    }
-
-    // 检测重复模式 (如 SSE 重复发送同一段内容)
-    // 使用 char 边界而非字节边界，避免 panic
-    let stripped = merged.trim().to_string();
-    let char_count = stripped.chars().count();
-    if char_count >= 12 {
-        let chars: Vec<char> = stripped.chars().collect();
-        for size in 4..(char_count / 2 + 1) {
-            if char_count.is_multiple_of(size) {
-                let repeats = char_count / size;
-                let piece: String = chars[..size].iter().collect();
-                if (repeats >= 3 || piece.chars().count() >= 12)
-                    && piece.repeat(repeats) == stripped
-                {
-                    return piece.trim().to_string();
-                }
-            }
-        }
-    }
-
-    stripped
 }

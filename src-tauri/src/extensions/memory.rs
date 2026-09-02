@@ -34,6 +34,12 @@ struct SuccessRecord {
     completed: Vec<String>,
     #[serde(default)]
     pending: Vec<String>,
+    #[serde(default)]
+    stage: String,
+    #[serde(default)]
+    stage_index: usize,
+    #[serde(default)]
+    next_stage: Option<String>,
     dag: Option<DagPlan>,
     user: String,
     result: String,
@@ -99,11 +105,26 @@ impl ResponseInterceptor for MemoryKernel {
         }
 
         let mut data = self.data.lock().unwrap();
-        let completed = ctx.meta.actions.pending.clone();
-        ctx.meta.actions.completed.extend(completed);
-        ctx.meta.actions.pending.clear();
+        let completed_actions = ctx.meta.stage.actions.clone();
+        for completed_action in &completed_actions {
+            if let Some(position) = ctx
+                .meta
+                .actions
+                .pending
+                .iter()
+                .position(|action| action == completed_action)
+            {
+                ctx.meta.actions.pending.remove(position);
+                ctx.meta.actions.completed.push(completed_action.clone());
+            }
+        }
         for node in &mut ctx.meta.actions.dag.nodes {
-            node.status = "completed".to_string();
+            if completed_actions
+                .iter()
+                .any(|action| action == &node.action)
+            {
+                node.status = "completed".to_string();
+            }
         }
 
         data.successes.push(SuccessRecord {
@@ -114,6 +135,13 @@ impl ResponseInterceptor for MemoryKernel {
             skills: ctx.meta.route.skills.clone(),
             completed: ctx.meta.actions.completed.clone(),
             pending: ctx.meta.actions.pending.clone(),
+            stage: ctx.meta.stage.kind.as_str().to_string(),
+            stage_index: ctx.meta.stage.index,
+            next_stage: ctx
+                .meta
+                .stage
+                .next_stage
+                .map(|stage| stage.as_str().to_string()),
             dag: Some(ctx.meta.actions.dag.clone()),
             user: ctx.meta.user_msg.chars().take(200).collect(),
             result: ctx.parsed.reply.chars().take(300).collect(),

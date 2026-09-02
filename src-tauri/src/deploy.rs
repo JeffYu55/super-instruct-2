@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub struct DeployManager {
     codex_home: PathBuf,
 }
@@ -56,6 +57,54 @@ impl DeployManager {
 
     pub fn codex_home(&self) -> &Path {
         &self.codex_home
+    }
+
+    /// Re-apply the local proxy settings when another Codex process rewrites
+    /// config.toml while the proxy is running. The rewritten user config is
+    /// kept as the clean backup so shutdown still restores the latest version.
+    pub fn ensure_active_config(&self, proxy_url: &str) -> Result<bool, String> {
+        let cfg = self.codex_home.join("config.toml");
+        let bak = self.codex_home.join("config.toml.super-instruct-bak");
+        let relay_file = self.codex_home.join("relay_url.txt");
+        let content = fs::read_to_string(&cfg).map_err(|e| format!("read config failed: {e}"))?;
+        let base_url_re = Regex::new(r#"base_url\s*=\s*"([^"]+)""#).unwrap();
+        let current_url = base_url_re
+            .captures(&content)
+            .and_then(|captures| captures.get(1))
+            .map(|value| value.as_str());
+        let instructions_active = content
+            .lines()
+            .any(|line| line.trim() == r#"model_instructions_file = "./bridge.md""#);
+        let proxy_active = current_url == Some(proxy_url);
+
+        if proxy_active && instructions_active {
+            return Ok(false);
+        }
+
+        // A non-proxy URL represents a new clean user configuration. Preserve
+        // it before patching and use it as the upstream relay destination.
+        if let Some(url) = current_url.filter(|url| *url != proxy_url) {
+            fs::copy(&cfg, &bak).map_err(|e| format!("backup drifted config failed: {e}"))?;
+            fs::write(&relay_file, url).map_err(|e| format!("update relay URL failed: {e}"))?;
+        }
+
+        let mut modified = if base_url_re.is_match(&content) {
+            base_url_re
+                .replace_all(&content, format!(r#"base_url = "{proxy_url}""#))
+                .into_owned()
+        } else {
+            format!("{content}\nbase_url = \"{proxy_url}\"\n")
+        };
+        let instructions_re = Regex::new(r#"model_instructions_file\s*=\s*"[^"]*""#).unwrap();
+        if instructions_re.is_match(&modified) {
+            modified = instructions_re
+                .replace_all(&modified, r#"model_instructions_file = "./bridge.md""#)
+                .into_owned();
+        } else {
+            modified.push_str("\nmodel_instructions_file = \"./bridge.md\"\n");
+        }
+        fs::write(&cfg, modified).map_err(|e| format!("repair config failed: {e}"))?;
+        Ok(true)
     }
 
     /// 部署 bridge.md + skills 到 Codex，修改 base_url 指向代理

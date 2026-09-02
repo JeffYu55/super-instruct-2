@@ -13,11 +13,14 @@ pub struct QualityAssessment {
 }
 
 pub fn assess(ctx: &ResponseCtx) -> QualityAssessment {
+    // A staged request is evaluated against its selected action. The complete
+    // workflow remains visible in the DAG and is evaluated when later stages
+    // arrive, preventing an early evidence response from failing on future work.
     assess_reply(
         &ctx.outcome,
         ctx.status,
         &ctx.parsed.reply,
-        &ctx.meta.actions.pending,
+        &ctx.meta.stage.actions,
     )
 }
 
@@ -99,9 +102,20 @@ fn verification_issues(actions: &[String], reply: &str) -> Vec<String> {
         .any(|action| matches!(action.as_str(), "transform" | "package"));
     let lower_reply = reply.to_lowercase();
     let has_artifact_signal = reply.contains("```")
-        || ["path:", "file:", "/users/", "/tmp/", "产物", "文件：", "文件:", "code:", "代码：", "代码:"]
-            .iter()
-            .any(|marker| lower_reply.contains(marker))
+        || [
+            "path:",
+            "file:",
+            "/users/",
+            "/tmp/",
+            "产物",
+            "文件：",
+            "文件:",
+            "code:",
+            "代码：",
+            "代码:",
+        ]
+        .iter()
+        .any(|marker| lower_reply.contains(marker))
         || [
             "fn ",
             "def ",

@@ -2,6 +2,7 @@
 
 use super::contract::TaskContract;
 use super::execution::ExecutionMode;
+use super::stages::StageContext;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use http::HeaderMap;
@@ -48,7 +49,8 @@ impl DagPlan {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum Category {
     Crack,
     Reverse,
@@ -57,14 +59,14 @@ pub enum Category {
     General,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ActionState {
     pub completed: Vec<String>,
     pub pending: Vec<String>,
     pub dag: DagPlan,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RoutePlan {
     pub profile: String,
     pub skills: Vec<String>,
@@ -72,6 +74,16 @@ pub struct RoutePlan {
     pub persist_memory: bool,
     pub monitor: bool,
     pub confidence: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ResearchRequestMeta {
+    pub session_id: String,
+    pub round: u32,
+    pub session_status: String,
+    pub evidence_refs: Vec<String>,
+    pub evidence_total: usize,
+    pub stop_reason: Option<String>,
 }
 
 impl Category {
@@ -102,6 +114,8 @@ pub struct RequestMeta {
     pub route: RoutePlan,
     pub actions: ActionState,
     pub contract: TaskContract,
+    pub stage: StageContext,
+    pub research: Option<ResearchRequestMeta>,
     pub execution_mode: ExecutionMode,
     pub path: String,
     pub timestamp: DateTime<Utc>,

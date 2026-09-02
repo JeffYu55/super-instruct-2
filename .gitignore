@@ -13,6 +13,10 @@ src-tauri/resources/
 node_modules/
 package-lock.json
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Build artifacts
 dist/
 build/

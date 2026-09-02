@@ -64,6 +64,15 @@ struct InteractionEvent<'a> {
     pending_actions: &'a [String],
     confidence: f32,
     execution_mode: String,
+    stage: &'static str,
+    stage_index: usize,
+    stage_total: usize,
+    next_stage: Option<&'static str>,
+    session_id: Option<&'a str>,
+    round: Option<u32>,
+    session_status: Option<&'a str>,
+    evidence_total: Option<usize>,
+    stop_reason: Option<&'a str>,
     injected: bool,
     status: u16,
     response_bytes: usize,
@@ -208,6 +217,31 @@ impl ResponseInterceptor for FileMonitor {
             pending_actions: &ctx.meta.actions.pending,
             confidence: ctx.meta.route.confidence,
             execution_mode: ctx.meta.execution_mode.to_string(),
+            stage: ctx.meta.stage.kind.as_str(),
+            stage_index: ctx.meta.stage.index,
+            stage_total: ctx.meta.stage.total,
+            next_stage: ctx.meta.stage.next_stage.map(|stage| stage.as_str()),
+            session_id: ctx
+                .meta
+                .research
+                .as_ref()
+                .map(|research| research.session_id.as_str()),
+            round: ctx.meta.research.as_ref().map(|research| research.round),
+            session_status: ctx
+                .meta
+                .research
+                .as_ref()
+                .map(|research| research.session_status.as_str()),
+            evidence_total: ctx
+                .meta
+                .research
+                .as_ref()
+                .map(|research| research.evidence_total),
+            stop_reason: ctx
+                .meta
+                .research
+                .as_ref()
+                .and_then(|research| research.stop_reason.as_deref()),
             injected: ctx.meta.route.inject_request,
             status: ctx.status,
             response_bytes: ctx.raw_body.len(),
@@ -374,12 +408,24 @@ mod tests {
     use chrono::Utc;
 
     fn response_ctx(outcome: UpstreamOutcome, reply: &str) -> ResponseCtx {
+        let category = Category::MalwareAnalysis;
+        let pending = vec!["inspect".into()];
+        let actions = ActionState {
+            completed: vec![],
+            dag: crate::core::dag::plan(&pending),
+            pending,
+        };
+        let stage = crate::core::stages::select(
+            &http::HeaderMap::new(),
+            &serde_json::json!({}),
+            &crate::core::stages::plan(&actions, &category),
+        );
         ResponseCtx {
             meta: RequestMeta {
                 request_id: "req-test".into(),
                 model: Some("test-model".into()),
                 user_msg: "test".into(),
-                category: Category::MalwareAnalysis,
+                category: category.clone(),
                 route: RoutePlan {
                     profile: "competition-malware-analysis".into(),
                     skills: vec![],
@@ -388,16 +434,10 @@ mod tests {
                     monitor: true,
                     confidence: 0.9,
                 },
-                actions: ActionState {
-                    completed: vec![],
-                    pending: vec!["inspect".into()],
-                    dag: crate::core::dag::plan(&["inspect".into()]),
-                },
-                contract: crate::core::build_contract(
-                    "test",
-                    &Category::MalwareAnalysis,
-                    &["inspect".into()],
-                ),
+                actions,
+                contract: crate::core::build_contract("test", &category, &["inspect".into()]),
+                stage,
+                research: None,
                 execution_mode: ExecutionMode::Interleaved,
                 path: "/responses".into(),
                 timestamp: Utc::now(),

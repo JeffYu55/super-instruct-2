@@ -1,7 +1,7 @@
 use super::context::Category;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestIntent {
     MalwareStaticAnalysis,
@@ -31,7 +31,7 @@ impl RequestIntent {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliverableKind {
     Implementation,
@@ -61,7 +61,7 @@ impl DeliverableKind {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TaskContract {
     pub original_request: String,
     pub requested_actions: Vec<String>,
