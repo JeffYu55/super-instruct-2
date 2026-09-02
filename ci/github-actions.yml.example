@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Rust format
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Python tests
+        run: python3 -m unittest -v scripts/test_evolution_engine.py scripts/test_smoke_test.py
+      - name: Script syntax
+        run: bash -n src-tauri/start-daemon.sh scripts/evolution_daemon.sh scripts/deploy_runtime.sh
