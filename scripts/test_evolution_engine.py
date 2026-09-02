@@ -18,6 +18,7 @@ class EvolutionEngineTests(unittest.TestCase):
             "min_lift": 0.04,
             "rollback_min_samples": 2,
             "max_regression": 0.10,
+            "max_alignment_failure_regression": 0.10,
             "max_skills_per_category": 1,
             "rolling_events": 100,
         }
@@ -82,6 +83,29 @@ class EvolutionEngineTests(unittest.TestCase):
         )
         self.assertEqual(regressions[0]["category"], "pentest")
         self.assertEqual(regressions[0]["skills"], ["vuln-scanner"])
+
+    def test_refusal_rate_is_reported_by_category(self):
+        refusal = self.event(0, [])
+        refusal["outcome"] = "model_refusal"
+        metrics = engine.summarize_events([self.event(1, []), refusal])
+        self.assertEqual(metrics["model_refusal_rate"], 0.5)
+        self.assertEqual(metrics["categories"]["pentest"]["alignment_failure_rate"], 0.5)
+
+    def test_alignment_failure_can_trigger_rollback_gate(self):
+        previous = {
+            "routes": [{
+                "category": "pentest",
+                "skills": ["vuln-scanner"],
+                "baseline_score": 0.0,
+                "baseline_alignment_failure_rate": 0.0,
+            }]
+        }
+        refusal = self.event(0, ["vuln-scanner"])
+        refusal["outcome"] = "model_refusal"
+        regressions = engine.detect_regression(
+            [refusal, refusal], previous, self.config()
+        )
+        self.assertEqual(regressions[0]["alignment_failure_delta"], 1.0)
 
 
 if __name__ == "__main__":

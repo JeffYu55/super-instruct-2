@@ -13,6 +13,11 @@ cycle:
 7. Compare post-promotion quality with the saved baseline; automatically roll
    back and quarantine a route when the configured regression gate is crossed.
 
+Each policy stores global and per-category rates for explicit model refusals,
+task divergence, transport failures and the composite alignment-failure rate.
+An adaptive route is eligible only when its score lift is positive and its
+alignment-failure rate is no worse than the same-category control cohort.
+
 `general` traffic is excluded from adaptation. A promotion can only add Skills
 from the category-specific allowlist in `config.json`. The previous policy is
 kept as `policy.json.prev`; roll it back with:

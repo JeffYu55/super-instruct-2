@@ -4,6 +4,7 @@
   "min_lift": 0.04,
   "rollback_min_samples": 8,
   "max_regression": 0.10,
+  "max_alignment_failure_regression": 0.10,
   "max_skills_per_category": 2,
   "rolling_events": 2000,
   "categories": ["crack", "reverse", "pentest", "malware-analysis"],

@@ -26,6 +26,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "evolution" / "config.json"
 DEFAULT_POLICY = ROOT / "evolution" / "policy.json"
 DEFAULT_HISTORY = ROOT / "evolution" / "generations"
+ALIGNMENT_FAILURES = {"model_refusal", "task_divergence", "provider_policy_block"}
 
 
 def read_json(path: pathlib.Path) -> dict:
@@ -85,6 +86,7 @@ def event_score(event: dict) -> float:
     error = 1.0 if outcome in {
         "transport_error", "protocol_error", "provider_policy_block", "cancelled"
     } else 0.0
+    alignment_failure = 1.0 if outcome in ALIGNMENT_FAILURES else 0.0
     completed = 1.0 if event.get("result_status") == "SUCCEEDED" else 0.0
     stopped = 1.0 if event.get("stop_reason") else 0.0
     return max(0.0, min(
@@ -95,8 +97,43 @@ def event_score(event: dict) -> float:
         + 0.15 * actions
         + 0.15 * completed
         - 0.25 * error
+        - 0.30 * alignment_failure
         - 0.15 * stopped,
     ))
+
+
+def rate(events: list[dict], outcomes: set[str]) -> float:
+    if not events:
+        return 0.0
+    return sum(event.get("outcome") in outcomes for event in events) / len(events)
+
+
+def summarize_events(events: list[dict]) -> dict:
+    categories: dict[str, list[dict]] = defaultdict(list)
+    for event in events:
+        categories[str(event.get("category", "unknown"))].append(event)
+
+    def summary(rows: list[dict]) -> dict:
+        counts: dict[str, int] = defaultdict(int)
+        for row in rows:
+            counts[str(row.get("outcome", "unknown"))] += 1
+        return {
+            "events": len(rows),
+            "mean_score": round(sum(map(event_score, rows)) / len(rows), 6) if rows else 0.0,
+            "alignment_failure_rate": round(rate(rows, ALIGNMENT_FAILURES), 6),
+            "model_refusal_rate": round(rate(rows, {"model_refusal"}), 6),
+            "task_divergence_rate": round(rate(rows, {"task_divergence"}), 6),
+            "transport_error_rate": round(
+                rate(rows, {"transport_error", "protocol_error", "cancelled"}), 6
+            ),
+            "outcomes": dict(sorted(counts.items())),
+        }
+
+    result = summary(events)
+    result["categories"] = {
+        category: summary(rows) for category, rows in sorted(categories.items())
+    }
+    return result
 
 
 def build_candidate(
@@ -138,6 +175,8 @@ def build_candidate(
         if len(baseline_values) < min_samples:
             continue
         baseline = sum(baseline_values) / len(baseline_values)
+        category_events = [event for event in events if event.get("category") == category]
+        baseline_alignment_failure = rate(category_events, ALIGNMENT_FAILURES)
         allowed_skills = set(eligible_skills.get(category, []))
         ranked = []
         for (skill_category, skill), values in skill_scores.items():
@@ -149,26 +188,55 @@ def build_candidate(
             ):
                 continue
             without_skill = [
-                event_score(event) for event in events
+                event for event in events
                 if event.get("category") == category and skill not in set(event.get("skills") or [])
             ]
             if len(without_skill) < min_samples:
                 continue
             mean = sum(values) / len(values)
-            control_mean = sum(without_skill) / len(without_skill)
+            control_mean = sum(map(event_score, without_skill)) / len(without_skill)
             lift = mean - control_mean
-            if lift >= min_lift:
-                ranked.append((lift, mean, len(values), skill))
+            with_skill = [
+                event for event in category_events if skill in set(event.get("skills") or [])
+            ]
+            candidate_failure = rate(with_skill, ALIGNMENT_FAILURES)
+            control_failure = rate(without_skill, ALIGNMENT_FAILURES)
+            if lift >= min_lift and candidate_failure <= control_failure:
+                ranked.append((
+                    lift,
+                    control_failure - candidate_failure,
+                    mean,
+                    len(values),
+                    skill,
+                    candidate_failure,
+                    control_failure,
+                ))
         ranked.sort(reverse=True)
-        selected = [item[3] for item in ranked[:max_skills]]
+        selected = [item[4] for item in ranked[:max_skills]]
         if selected:
             routes.append({
                 "category": category,
                 "skills": selected,
                 "baseline_score": round(baseline, 6),
+                "baseline_alignment_failure_rate": round(baseline_alignment_failure, 6),
                 "observed": [
-                    {"skill": skill, "lift": round(lift, 6), "score": round(mean, 6), "samples": samples}
-                    for lift, mean, samples, skill in ranked[:max_skills]
+                    {
+                        "skill": skill,
+                        "lift": round(lift, 6),
+                        "score": round(mean, 6),
+                        "samples": samples,
+                        "alignment_failure_rate": round(candidate_failure, 6),
+                        "control_alignment_failure_rate": round(control_failure, 6),
+                    }
+                    for (
+                        lift,
+                        _,
+                        mean,
+                        samples,
+                        skill,
+                        candidate_failure,
+                        control_failure,
+                    ) in ranked[:max_skills]
                 ],
             })
 
@@ -183,9 +251,8 @@ def build_candidate(
         "routes": routes,
         "blocked_routes": previous.get("blocked_routes", []),
         "metrics": {
-            "events": len(events),
+            **summarize_events(events),
             "eligible_routes": len(routes),
-            "mean_score": round(sum(map(event_score, events)) / len(events), 6) if events else 0.0,
         },
     }
 
@@ -216,6 +283,9 @@ def validate(candidate: dict, config: dict) -> None:
 def detect_regression(events: list[dict], previous: dict, config: dict) -> list[dict]:
     minimum = int(config.get("rollback_min_samples", 8))
     maximum_drop = float(config.get("max_regression", 0.10))
+    maximum_alignment_failure = float(
+        config.get("max_alignment_failure_regression", 0.10)
+    )
     regressions = []
     for route in previous.get("routes", []):
         category = route.get("category")
@@ -225,13 +295,30 @@ def detect_regression(events: list[dict], previous: dict, config: dict) -> list[
             continue
         observed = sum(scores) / len(scores)
         drop = baseline - observed
-        if drop >= maximum_drop:
+        baseline_alignment_failure = float(
+            route.get("baseline_alignment_failure_rate", 0.0)
+        )
+        category_events = [
+            event for event in events if event.get("category") == category
+        ]
+        observed_alignment_failure = rate(category_events, ALIGNMENT_FAILURES)
+        alignment_failure_delta = (
+            observed_alignment_failure - baseline_alignment_failure
+        )
+        if drop >= maximum_drop or alignment_failure_delta >= maximum_alignment_failure:
             regressions.append({
                 "category": category,
                 "skills": route.get("skills", []),
                 "baseline_score": round(baseline, 6),
                 "observed_score": round(observed, 6),
                 "drop": round(drop, 6),
+                "baseline_alignment_failure_rate": round(
+                    baseline_alignment_failure, 6
+                ),
+                "observed_alignment_failure_rate": round(
+                    observed_alignment_failure, 6
+                ),
+                "alignment_failure_delta": round(alignment_failure_delta, 6),
                 "samples": len(scores),
             })
     return regressions

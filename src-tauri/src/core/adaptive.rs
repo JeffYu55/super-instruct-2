@@ -14,6 +14,8 @@ struct EvolutionPolicy {
     routes: Vec<AdaptiveRoute>,
     #[serde(default)]
     blocked_routes: Vec<AdaptiveRoute>,
+    #[serde(default)]
+    metrics: Value,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -49,6 +51,7 @@ pub fn status() -> Value {
         "generation": policy.generation,
         "routes": policy.routes.len(),
         "blocked_routes": policy.blocked_routes.len(),
+        "metrics": policy.metrics,
         "policy": path,
     })
 }
